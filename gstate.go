@@ -20,6 +20,10 @@ type Machine struct {
 	stateMutex                 sync.Mutex
 	waitGroup                  sync.WaitGroup
 	processedCount             int
+
+	//machine-global lifecycle functions
+	LeaveStateFunc func()
+	EnterStateFunc func()
 }
 
 func (m *Machine) Start(initialState *State) {
@@ -46,8 +50,25 @@ func (m *Machine) daemon() {
 					return
 				}
 				if transition, ok := m.stateEventMapTransitionMap[m.currentState][tm.event]; ok && transition.Src == m.currentState {
+					// leave any state lifecyle
+					if m.LeaveStateFunc != nil {
+						m.LeaveStateFunc()
+					}
+					// leave the current state lifecycle
+					if m.currentState.LeaveStateFunc != nil {
+						m.currentState.LeaveStateFunc()
+					}
+					// transition success
 					m.currentState = transition.Dst
 					m.processedCount++
+					// enter the new state lifecycle
+					if m.currentState.EnterStateFunc != nil {
+						m.currentState.EnterStateFunc()
+					}
+					// enter any state lifecycle
+					if m.EnterStateFunc != nil {
+						m.EnterStateFunc()
+					}
 				}
 			}()
 		}
@@ -67,6 +88,7 @@ func (m *Machine) WaitForTransitions() {
 // Send an event to the machine.
 // It will send `transitionMeta` to the `transitionChan` to process the transition async.
 func (m *Machine) SendEvent(event *Event) error {
+	// check if the event is valid
 	m.stateMutex.Lock()
 	defer m.stateMutex.Unlock()
 	transition, ok := m.stateEventMapTransitionMap[m.currentState][event]
@@ -78,6 +100,7 @@ func (m *Machine) SendEvent(event *Event) error {
 		err := fmt.Errorf("invalid event: %s, current state: %s", event.Name, m.currentState.Name)
 		return err
 	}
+	// send the transitionMeta to the transitionChan
 	m.waitGroup.Add(1)
 	tm := transitionMeta{event: event, happendAt: m.processedCount}
 	done := func() {
@@ -106,7 +129,9 @@ type Event struct {
 }
 
 type State struct {
-	Name string
+	Name           string
+	LeaveStateFunc func()
+	EnterStateFunc func()
 }
 
 type EventTransition struct {

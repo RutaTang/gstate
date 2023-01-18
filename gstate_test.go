@@ -199,3 +199,44 @@ func TestCancelTransition(t *testing.T) {
 		t.Error("Expected 'ice', got ", m.GetCurrentStateName())
 	}
 }
+
+func TestStateLifeCycle(t *testing.T) {
+	//states
+	water := gstate.State{Name: "water",
+		EnterStateFunc: func() {
+			time.Sleep(1 * time.Second)
+		},
+	}
+	ice := gstate.State{Name: "ice",
+		LeaveStateFunc: func() {
+			time.Sleep(1 * time.Second)
+		},
+	}
+
+	//events
+	up := gstate.Event{Name: "up"}
+
+	eventTransitionMap := gstate.EventTransitionGroup{
+		gstate.EventTransition{
+			Event: &up,
+			Transition: &gstate.Transition{
+				Src: &ice,
+				Dst: &water,
+			},
+		},
+	}
+
+	m := gstate.NewMachine(eventTransitionMap)
+	m.Start(&ice)
+
+	m.SendEvent(&up)
+	now := time.Now()
+	m.WaitForTransitions()
+	elapsed := time.Since(now)
+	if elapsed < 2*time.Second {
+		t.Error("Expected to wait for 2 second, got ", elapsed)
+	}
+	if m.GetCurrentStateName() != "water" {
+		t.Error("Expected 'water', got ", m.GetCurrentStateName())
+	}
+}
