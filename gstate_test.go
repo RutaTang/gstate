@@ -1,6 +1,7 @@
 package gstate_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -14,15 +15,15 @@ func TestBasic(t *testing.T) {
 	s1 := gstate.State{Name: "closed"}
 	s2 := gstate.State{Name: "open"}
 
-	eventTransitionMap := gstate.EventTransitionGroup{
-		gstate.EventTransition{
+	eventTransitionMap := &gstate.EventTransitionGroup{
+		&gstate.EventTransition{
 			Event: &e1,
 			Transition: &gstate.Transition{
 				Src: &s1,
 				Dst: &s2,
 			},
 		},
-		gstate.EventTransition{
+		&gstate.EventTransition{
 			Event: &e2,
 			Transition: &gstate.Transition{
 				Src: &s2,
@@ -58,29 +59,29 @@ func TestOnEventToManyTransitions(t *testing.T) {
 	down := gstate.Event{Name: "down"}
 	up := gstate.Event{Name: "up"}
 
-	eventTransitionMap := gstate.EventTransitionGroup{
-		gstate.EventTransition{
+	eventTransitionMap := &gstate.EventTransitionGroup{
+		&gstate.EventTransition{
 			Event: &down,
 			Transition: &gstate.Transition{
 				Src: &water,
 				Dst: &ice,
 			},
 		},
-		gstate.EventTransition{
+		&gstate.EventTransition{
 			Event: &down,
 			Transition: &gstate.Transition{
 				Src: &gas,
 				Dst: &water,
 			},
 		},
-		gstate.EventTransition{
+		&gstate.EventTransition{
 			Event: &up,
 			Transition: &gstate.Transition{
 				Src: &ice,
 				Dst: &water,
 			},
 		},
-		gstate.EventTransition{
+		&gstate.EventTransition{
 			Event: &up,
 			Transition: &gstate.Transition{
 				Src: &water,
@@ -129,8 +130,8 @@ func TestTransitionWithAsyncFunction(t *testing.T) {
 	down := gstate.Event{Name: "down"}
 	up := gstate.Event{Name: "up"}
 
-	eventTransitionMap := gstate.EventTransitionGroup{
-		gstate.EventTransition{
+	eventTransitionMap := &gstate.EventTransitionGroup{
+		&gstate.EventTransition{
 			Event: &down,
 			Transition: &gstate.Transition{
 				Src: &water,
@@ -143,7 +144,7 @@ func TestTransitionWithAsyncFunction(t *testing.T) {
 				},
 			},
 		},
-		gstate.EventTransition{
+		&gstate.EventTransition{
 			Event: &up,
 			Transition: &gstate.Transition{
 				Src: &ice,
@@ -175,8 +176,8 @@ func TestCancelTransition(t *testing.T) {
 	//events
 	up := gstate.Event{Name: "up"}
 
-	eventTransitionMap := gstate.EventTransitionGroup{
-		gstate.EventTransition{
+	eventTransitionMap := &gstate.EventTransitionGroup{
+		&gstate.EventTransition{
 			Event: &up,
 			Transition: &gstate.Transition{
 				Src: &ice,
@@ -216,8 +217,8 @@ func TestStateLifeCycle(t *testing.T) {
 	//events
 	up := gstate.Event{Name: "up"}
 
-	eventTransitionMap := gstate.EventTransitionGroup{
-		gstate.EventTransition{
+	eventTransitionMap := &gstate.EventTransitionGroup{
+		&gstate.EventTransition{
 			Event: &up,
 			Transition: &gstate.Transition{
 				Src: &ice,
@@ -239,4 +240,63 @@ func TestStateLifeCycle(t *testing.T) {
 	if m.GetCurrentStateName() != "water" {
 		t.Error("Expected 'water', got ", m.GetCurrentStateName())
 	}
+}
+
+func TestStateDaemon(t *testing.T) {
+
+	done := make(chan struct{})
+	//states
+	gas := gstate.State{Name: "gas"}
+	water := gstate.State{Name: "water", DaemonFunc: func(ctx context.Context) {
+		for {
+			select {
+			case <-ctx.Done():
+				done <- struct{}{}
+				return
+			}
+		}
+	}}
+	ice := gstate.State{Name: "ice"}
+
+	//events
+	up := gstate.Event{Name: "up"}
+
+	eventTransitionMap := &gstate.EventTransitionGroup{
+		&gstate.EventTransition{
+			Event: &up,
+			Transition: &gstate.Transition{
+				Src: &ice,
+				Dst: &water,
+			},
+		},
+		&gstate.EventTransition{
+			Event: &up,
+			Transition: &gstate.Transition{
+				Src: &water,
+				Dst: &gas,
+			},
+		},
+	}
+
+	m := gstate.NewMachine(eventTransitionMap)
+	m.Start(&ice)
+
+	m.SendEvent(&up)
+	m.WaitForTransitions()
+
+	m.SendEvent(&up)
+	m.WaitForTransitions()
+
+	if m.GetCurrentStateName() != "gas" {
+		t.Error("Expected 'gas', got ", m.GetCurrentStateName())
+	}
+
+	// should stop state daemon in time
+	select {
+	case <-done:
+		break
+	case <-time.After(2 * time.Second):
+		t.Error("Expected daemon to be stopped")
+	}
+
 }

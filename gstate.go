@@ -1,6 +1,7 @@
 package gstate
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
@@ -18,7 +19,7 @@ type Machine struct {
 	currentState               *State
 	transitionChan             chan transitionMeta
 	stateMutex                 sync.Mutex
-	waitGroup                  sync.WaitGroup
+	transitionWaitGroup        sync.WaitGroup //
 	processedCount             int
 
 	//machine-global lifecycle functions
@@ -42,7 +43,7 @@ func (m *Machine) daemon() {
 			func() {
 				m.stateMutex.Lock()
 				defer m.stateMutex.Unlock()
-				defer m.waitGroup.Done()
+				defer m.transitionWaitGroup.Done()
 				if tm.err != nil {
 					return
 				}
@@ -58,6 +59,10 @@ func (m *Machine) daemon() {
 					if m.currentState.LeaveStateFunc != nil {
 						m.currentState.LeaveStateFunc()
 					}
+					// cancel previous state's daemon
+					if m.currentState.cancel != nil {
+						m.currentState.cancel()
+					}
 					// transition success
 					m.currentState = transition.Dst
 					m.processedCount++
@@ -68,6 +73,12 @@ func (m *Machine) daemon() {
 					// enter any state lifecycle
 					if m.EnterStateFunc != nil {
 						m.EnterStateFunc()
+					}
+					// run the state' daemon function in a goroutine
+					if m.currentState.DaemonFunc != nil {
+						ctx, cancel := context.WithCancel(context.Background())
+						m.currentState.cancel = cancel
+						go m.currentState.DaemonFunc(ctx)
 					}
 				}
 			}()
@@ -82,7 +93,7 @@ func (m *Machine) GetCurrentStateName() string {
 // Wait for all the transitions to be finished.
 // Note: this function should always be called after sending an event even though there is just one event to make sure the transition is finished.
 func (m *Machine) WaitForTransitions() {
-	m.waitGroup.Wait()
+	m.transitionWaitGroup.Wait()
 }
 
 // Send an event to the machine.
@@ -101,7 +112,7 @@ func (m *Machine) SendEvent(event *Event) error {
 		return err
 	}
 	// send the transitionMeta to the transitionChan
-	m.waitGroup.Add(1)
+	m.transitionWaitGroup.Add(1)
 	tm := transitionMeta{event: event, happendAt: m.processedCount}
 	done := func() {
 		m.transitionChan <- tm
@@ -132,6 +143,9 @@ type State struct {
 	Name           string
 	LeaveStateFunc func()
 	EnterStateFunc func()
+	DaemonFunc     func(ctx context.Context) // run in a goroutine while the state is active
+
+	cancel context.CancelFunc // cancel the state's daemon function
 }
 
 type EventTransition struct {
@@ -139,11 +153,11 @@ type EventTransition struct {
 	Transition *Transition
 }
 
-type EventTransitionGroup []EventTransition
+type EventTransitionGroup []*EventTransition
 
-func NewMachine(eventTransitionGroup EventTransitionGroup) *Machine {
+func NewMachine(eventTransitionGroup *EventTransitionGroup) *Machine {
 	stateEventMapTransitionMap := make(map[*State]map[*Event]*Transition)
-	for _, eventTransition := range eventTransitionGroup {
+	for _, eventTransition := range *eventTransitionGroup {
 		event := eventTransition.Event
 		src := eventTransition.Transition.Src
 		transition := eventTransition.Transition
