@@ -247,7 +247,7 @@ func TestStateDaemon(t *testing.T) {
 	done := make(chan struct{})
 	//states
 	gas := gstate.State{Name: "gas"}
-	water := gstate.State{Name: "water", DaemonFunc: func(ctx context.Context) {
+	water := gstate.State{Name: "water", DaemonFunc: func(ctx context.Context, state *gstate.State) {
 		for {
 			select {
 			case <-ctx.Done():

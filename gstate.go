@@ -78,7 +78,7 @@ func (m *Machine) daemon() {
 					if m.currentState.DaemonFunc != nil {
 						ctx, cancel := context.WithCancel(context.Background())
 						m.currentState.cancel = cancel
-						go m.currentState.DaemonFunc(ctx)
+						go m.currentState.DaemonFunc(ctx, m.currentState)
 					}
 				}
 			}()
@@ -141,9 +141,10 @@ type Event struct {
 
 type State struct {
 	Name           string
+	Data           interface{} // any data you want to store in the state
 	LeaveStateFunc func()
 	EnterStateFunc func()
-	DaemonFunc     func(ctx context.Context) // run in a goroutine while the state is active
+	DaemonFunc     func(ctx context.Context, state *State) // run in a goroutine while the state is active
 
 	cancel context.CancelFunc // cancel the state's daemon function
 }
